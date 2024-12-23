@@ -10,6 +10,7 @@ Use git clone to download the project
 
 ```bash
 git clone git@github.com:faosldkjfhf/wave-equation.git
+cd wave-equation
 mkdir build
 cd build
 cmake ..
