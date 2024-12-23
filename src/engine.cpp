@@ -7,6 +7,7 @@ using Color = Vector4f;
 namespace Visualizer {
 
 Engine::Engine() : mWidth(600), mHeight(600) {
+  // initialize glfw
   if (!glfwInit()) {
     throw std::runtime_error("failed to initialize glfw");
   }
@@ -25,6 +26,8 @@ Engine::Engine() : mWidth(600), mHeight(600) {
   gladLoadGLLoader((GLADloadproc)glfwGetProcAddress);
 
   glfwSetWindowUserPointer(mWindow, this);
+
+  // update mMouseClicked and mMousePosition of the click
   glfwSetMouseButtonCallback(mWindow, [](GLFWwindow *window, int button, int action, int mods) {
     Engine *e = (Engine *)glfwGetWindowUserPointer(window);
 
@@ -40,12 +43,15 @@ Engine::Engine() : mWidth(600), mHeight(600) {
       e->mMouseClicked = false;
     }
   });
+
+  // escape stops program
   glfwSetKeyCallback(mWindow, [](GLFWwindow *window, int key, int scancode, int action, int mods) {
     if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS) {
       glfwSetWindowShouldClose(window, true);
     }
   });
 
+  // enable opengl debugging
   int flags;
   glGetIntegerv(GL_CONTEXT_FLAGS, &flags);
   if (flags & GL_CONTEXT_FLAG_DEBUG_BIT) {
@@ -55,6 +61,7 @@ Engine::Engine() : mWidth(600), mHeight(600) {
     glDebugMessageControl(GL_DEBUG_SOURCE_API, GL_DEBUG_TYPE_ERROR, GL_DEBUG_SEVERITY_HIGH, 0, nullptr, GL_TRUE);
   }
 
+  // initialize pipelines
   mPipeline = std::make_shared<Pipeline>();
   mComputePipeline = std::make_shared<Pipeline>();
   mDerivativeMapPipeline = std::make_shared<Pipeline>();
@@ -130,9 +137,10 @@ void Engine::Init() {
   mDerivativeMapPipeline->Build();
 
   // create the texture to write to
-  float black[mWidth * mHeight * 4];
-  std::fill_n(black, mWidth * mHeight * 4, 0.0f);
+  Color black[mWidth * mHeight];
+  std::fill_n(black, mWidth * mHeight, Color());
 
+  // height map
   glGenTextures(1, &mTexture);
   glActiveTexture(GL_TEXTURE0);
   glBindTexture(GL_TEXTURE_2D, mTexture);
@@ -143,6 +151,7 @@ void Engine::Init() {
   glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, mWidth, mHeight, 0, GL_RGBA, GL_FLOAT, black);
   glBindImageTexture(0, mTexture, 0, GL_FALSE, 0, GL_READ_WRITE, GL_RGBA32F);
 
+  // derivative map
   glGenTextures(1, &mDerivativeTexture);
   glActiveTexture(GL_TEXTURE1);
   glBindTexture(GL_TEXTURE_2D, mDerivativeTexture);
@@ -163,6 +172,23 @@ void Engine::Render() {
   glClearColor(0.5f, 0.5f, 1.0f, 1.0f);
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
+  // update height map
+  mComputePipeline->Bind();
+  mComputePipeline->SetInt("uMouseClicked", mMouseClicked);
+  mComputePipeline->SetVec2("uMousePosition", mMousePosition);
+  mComputePipeline->SetFloat("uTau", 0.2f);
+  mComputePipeline->SetFloat("uAlpha", 0.985);
+  glDispatchCompute(static_cast<unsigned int>(mWidth / 8), static_cast<unsigned int>(mHeight / 8), 1);
+  glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+
+  // update derivative map
+  mDerivativeMapPipeline->Bind();
+  mDerivativeMapPipeline->SetFloat("uTau", 0.2f);
+  mDerivativeMapPipeline->SetFloat("uAlpha", 0.985f);
+  glDispatchCompute(static_cast<unsigned int>(mWidth / 8), static_cast<unsigned int>(mHeight / 8), 1);
+  glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+
+  // render pass
   mPipeline->Bind();
   mPipeline->SetInt("uTexture", 0);
   mPipeline->SetInt("uDerivativeTexture", 1);
@@ -172,18 +198,6 @@ void Engine::Render() {
   glBindTexture(GL_TEXTURE_2D, mDerivativeTexture);
   glBindVertexArray(mVao);
   glDrawElements(GL_TRIANGLES, mIndices.size(), GL_UNSIGNED_INT, 0);
-
-  // compute shader pass
-  mComputePipeline->Bind();
-  mComputePipeline->SetInt("uMouseClicked", mMouseClicked);
-  mComputePipeline->SetVec2("uMousePosition", mMousePosition);
-  glDispatchCompute(static_cast<unsigned int>(mWidth / 8), static_cast<unsigned int>(mHeight / 8), 1);
-  glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
-
-  // update derivative map
-  mDerivativeMapPipeline->Bind();
-  glDispatchCompute(static_cast<unsigned int>(mWidth / 8), static_cast<unsigned int>(mHeight / 8), 1);
-  glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
 
   // swap buffers
   glfwSwapBuffers(mWindow);
